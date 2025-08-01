@@ -1,4 +1,7 @@
 from django.db import models
+from django.contrib.auth import get_user_model
+
+User = get_user_model()
 
 # Create your models here.
 class Room(models.Model):
@@ -10,7 +13,7 @@ class Room(models.Model):
     
 class ChatMessage(models.Model):
     room = models.ForeignKey(Room, on_delete=models.CASCADE, related_name='messages', null=True,blank=True)
-    user = models.CharField(max_length=100,null=False, blank=False)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='messages', null=True, blank=True)
     message = models.TextField(null=False, blank=False)
     timestamp = models.DateTimeField(auto_now_add=True,null=False, blank=False)
 

@@ -4,29 +4,38 @@ from channels.db import database_sync_to_async
 from django.utils.timezone import now
 from .models import ChatMessage, Room 
 from django.contrib.auth import get_user_model
+from django.contrib.auth.models import AnonymousUser
 
 User = get_user_model()
 
 class ChatConsumer(AsyncWebsocketConsumer):
-    # Class attributes are no longer needed for room_group_name
-    
     async def connect(self):
         """
         Called when a WebSocket connection is established.
         """
-        # Get the room name from the URL path
         self.room_name = self.scope['url_route']['kwargs']['room_name']
         self.room_group_name = f'chat_{self.room_name}'
         
-        # Check if the room exists in the database
+        self.user = self.scope['user']
+        
+        if isinstance(self.user, AnonymousUser):
+            print("Unauthenticated user attempted to connect. Closing connection.")
+            await self.close(code=1000)
+            return
+            
         try:
             self.room = await self.get_room()
+            # Changed the log message to use email
+            print(f"User '{self.user.email}' connected to room '{self.room_name}'.")
         except Room.DoesNotExist:
             print(f"Room '{self.room_name}' does not exist. Closing connection.")
             await self.close()
             return
+        except Exception as e:
+            print(f"An unexpected error occurred during connection: {e}")
+            await self.close()
+            return
         
-        # Join the room group
         await self.channel_layer.group_add(
             self.room_group_name,
             self.channel_name
@@ -43,11 +52,11 @@ class ChatConsumer(AsyncWebsocketConsumer):
         """
         Called when a WebSocket connection is closed.
         """
-        # Leave the room group
-        await self.channel_layer.group_discard(
-            self.room_group_name,
-            self.channel_name
-        )
+        if isinstance(self.user, User):
+            await self.channel_layer.group_discard(
+                self.room_group_name,
+                self.channel_name
+            )
         print(f"WebSocket disconnected from room {self.room_name} with close code: {close_code}")
 
     async def receive(self, text_data):
@@ -56,17 +65,15 @@ class ChatConsumer(AsyncWebsocketConsumer):
         """
         data = json.loads(text_data)
         message = data.get('message')
-        user = self.scope['user']
-
-        if user.is_authenticated and message:
-            # We use self.room which was fetched in the connect method
-            chat_message_obj = await self.create_chat_message(user, self.room, message)
+        
+        if isinstance(self.user, User) and message:
+            chat_message_obj = await self.create_chat_message(self.user, self.room, message)
             
             await self.channel_layer.group_send(
                 self.room_group_name,
                 {
                     'type': 'chat_message',
-                    'user': user.username,
+                    'user': self.user.first_name or self.user.email,
                     'message': message,
                     'timestamp': chat_message_obj.timestamp.strftime('%Y-%m-%d %H:%M:%S')
                 }
@@ -79,22 +86,13 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
     @database_sync_to_async
     def get_room(self):
-        """
-        Fetches the room object from the database asynchronously.
-        """
         return Room.objects.get(name=self.room_name)
 
     @database_sync_to_async
     def create_chat_message(self, user, room, message):
-        """
-        Synchronous function to create a new chat message in the database.
-        """
         return ChatMessage.objects.create(user=user, room=room, message=message)
 
     async def chat_message(self, event):
-        """
-        Receive message from the room group and forward it to the WebSocket.
-        """
         message = event['message']
         user = event['user']
         timestamp = event['timestamp']
